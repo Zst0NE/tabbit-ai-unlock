@@ -6,3 +6,4 @@ api_config.json
 _analysis/
 launch_tabbit_byok.bat
 launch_tabbit_byok.ps1
+launch_tabbit_embed_glic.bat

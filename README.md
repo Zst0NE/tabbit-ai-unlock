@@ -21,6 +21,20 @@ python tabbit_ai_unlock.py --status
 python tabbit_ai_unlock.py --restore --restore-updates
 ```
 
+## Can native Tabbit AI use my OpenAI key?
+
+**Short answer: no — not as a drop-in.** See [RESEARCH_NATIVE_AI.md](RESEARCH_NATIVE_AI.md).
+
+- Built-in AI backends are Meituan (`web.tabbit.ai`, `skills.tabbit.*`) + Google Glic protocol.
+- There is a test switch `--glic-guest-url=` that can point the **native Glic WebView** at localhost (`http://localhost` is allow-listed), but the host still expects the Glic guest protocol, so a plain OpenAI page is only an experiment.
+- **Reliable embedded UI:** Chromium Side Panel extension (`--install-extension`).
+
+```bash
+# Experimental: native Glic WebView -> local BYOK page
+python tabbit_ai_unlock.py --set-api --provider openai --api-key sk-xxx --model gpt-4o-mini
+python tabbit_ai_unlock.py --embed-glic
+```
+
 ## Custom OpenAI / Anthropic API (embedded side panel)
 
 Tabbit's **built-in** AI panel talks to Meituan (`web.tabbit.ai`, `skills.tabbit.com`, …) and Google backends. There is **no** official preference for plugging in your own OpenAI/Anthropic base URL, so this repo ships an **embedded Chromium Side Panel extension** that lives inside Tabbit's UI.

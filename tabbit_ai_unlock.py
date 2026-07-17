@@ -101,7 +101,7 @@ JE_REL32 = bytes([0x0F, 0x84])                      # je  rel32
 NOP_6 = bytes([0x90] * 6)                           # 6x nop
 SET_DEFAULT_TRUE = bytes([0xB2, 0x01, 0xE8])        # mov dl, 1; call ...
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
@@ -824,6 +824,74 @@ def cmd_install_extension() -> bool:
     return True
 
 
+def cmd_embed_glic(port: int, bind: str) -> bool:
+    """Experimental: point native Glic guest WebView at local BYOK page.
+
+    Uses Chromium switch --glic-guest-url (see RESEARCH_NATIVE_AI.md).
+    localhost is already in Tabbit's glicAllowedOrigins.
+    This does NOT implement the full Glic guest protocol — the panel may load
+    our UI but miss tab-context / host handshake features.
+    """
+    cfg = _load_api_config()
+    if not cfg or not cfg.get("api_key"):
+        print("[FAIL] No API config. Run --set-api first.")
+        return False
+
+    exe = _find_tabbit_exe()
+    if not exe:
+        print("[FAIL] Tabbit Browser.exe not found.")
+        return False
+
+    guest = f"http://{bind}:{port}/"
+    ext = _extension_install_dir()
+    args = [exe, f"--glic-guest-url={guest}"]
+    # If extension was installed, load it too for a reliable fallback panel
+    if os.path.isdir(ext) and os.path.isfile(os.path.join(ext, "manifest.json")):
+        args.append(f"--load-extension={ext}")
+
+    # Write experimental launcher
+    launcher_dir = os.path.dirname(os.path.abspath(__file__))
+    bat_path = os.path.join(launcher_dir, "launch_tabbit_embed_glic.bat")
+    with open(bat_path, "w", encoding="utf-8") as f:
+        f.write("@echo off\r\n")
+        f.write("REM Experimental: native Glic WebView -> local BYOK\r\n")
+        f.write(f'start "" "{exe}" --glic-guest-url={guest}')
+        if os.path.isdir(ext):
+            f.write(f' --load-extension="{ext}"')
+        f.write("\r\n")
+
+    print("[EXPERIMENTAL] Native Glic guest URL override")
+    print(f"     guest URL : {guest}")
+    print(f"     exe       : {exe}")
+    print(f"     launcher  : {bat_path}")
+    print()
+    print("Notes (read RESEARCH_NATIVE_AI.md):")
+    print("  - Tabbit allows http://localhost in glicAllowedOrigins")
+    print("  - Host still expects Glic guest protocol; full parity is NOT guaranteed")
+    print("  - Prefer --install-extension for reliable embedded BYOK")
+    print()
+    print("Starting local BYOK server (Ctrl+C stops).")
+    print("Fully quit other Tabbit instances, then open AI/Glic panel or use the bat.")
+
+    # Launch browser once, then serve
+    try:
+        import subprocess
+        subprocess.Popen(args, close_fds=True)
+        print("[OK] Tabbit process started with --glic-guest-url")
+    except Exception as e:
+        print(f"[WARN] Could not auto-start Tabbit: {e}")
+        print(f"       Run manually: {bat_path}")
+
+    try:
+        from tabbit_byok import run_server
+    except ImportError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from tabbit_byok import run_server
+
+    run_server(cfg, host=bind, port=port)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -844,6 +912,7 @@ examples:
   %(prog)s --set-api --provider anthropic --api-key sk-ant-xxx --model claude-sonnet-4-6
   %(prog)s --set-api --provider openai-compatible --base-url https://proxy/v1 --api-key sk-xxx
   %(prog)s --install-extension
+  %(prog)s --embed-glic
   %(prog)s --byok
         """,
     )
@@ -862,6 +931,11 @@ examples:
         action="store_true",
         help="install embedded BYOK side-panel extension into Tabbit",
     )
+    parser.add_argument(
+        "--embed-glic",
+        action="store_true",
+        help="EXPERIMENTAL: start BYOK + launch Tabbit with --glic-guest-url (native panel WebView)",
+    )
     parser.add_argument("--byok", action="store_true", help="launch local BYOK chat panel (localhost)")
     parser.add_argument("--provider", type=str, default=None,
                         help="openai | anthropic | openai-compatible")
@@ -876,7 +950,8 @@ examples:
     args = parser.parse_args()
 
     api_actions = any([
-        args.set_api, args.show_api, args.clear_api, args.byok, args.install_extension
+        args.set_api, args.show_api, args.clear_api, args.byok,
+        args.install_extension, args.embed_glic,
     ])
     unlock_actions = any([
         args.patch, args.restore, args.status, args.block_updates, args.restore_updates
@@ -902,6 +977,9 @@ examples:
 
     if args.install_extension:
         ok = cmd_install_extension() and ok
+
+    if args.embed_glic:
+        return 0 if cmd_embed_glic(args.port, args.bind) else 1
 
     if args.byok:
         return 0 if cmd_byok(args.port, args.bind) else 1
