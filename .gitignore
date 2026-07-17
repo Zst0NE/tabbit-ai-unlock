@@ -4,3 +4,5 @@ __pycache__/
 *.dll
 api_config.json
 _analysis/
+launch_tabbit_byok.bat
+launch_tabbit_byok.ps1

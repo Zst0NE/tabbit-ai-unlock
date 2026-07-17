@@ -21,18 +21,16 @@ python tabbit_ai_unlock.py --status
 python tabbit_ai_unlock.py --restore --restore-updates
 ```
 
-## Custom OpenAI / Anthropic API (BYOK)
+## Custom OpenAI / Anthropic API (embedded side panel)
 
-Tabbit's **built-in** AI panel talks to Meituan (`web.tabbit.ai`, `skills.tabbit.com`, …) and Google backends. There is **no** official preference for plugging in your own OpenAI/Anthropic base URL.
-
-This tool therefore ships a **local BYOK chat panel** that uses *your* API key:
+Tabbit's **built-in** AI panel talks to Meituan (`web.tabbit.ai`, `skills.tabbit.com`, …) and Google backends. There is **no** official preference for plugging in your own OpenAI/Anthropic base URL, so this repo ships an **embedded Chromium Side Panel extension** that lives inside Tabbit's UI.
 
 ```bash
-# OpenAI official
+# 1) Save your API config (optional but recommended)
 python tabbit_ai_unlock.py --set-api --provider openai \
   --api-key sk-xxx --model gpt-4o-mini
 
-# Anthropic official
+# Anthropic
 python tabbit_ai_unlock.py --set-api --provider anthropic \
   --api-key sk-ant-xxx --model claude-sonnet-4-6
 
@@ -41,14 +39,21 @@ python tabbit_ai_unlock.py --set-api --provider openai-compatible \
   --base-url https://your-proxy.example/v1 \
   --api-key sk-xxx --model deepseek-chat
 
-# Launch local panel → open http://127.0.0.1:8765/ in Tabbit
-python tabbit_ai_unlock.py --byok
+# 2) Install the embedded side-panel extension + launcher
+python tabbit_ai_unlock.py --install-extension
 
-python tabbit_ai_unlock.py --show-api
-python tabbit_ai_unlock.py --clear-api
+# 3) Fully quit Tabbit, then double-click launch_tabbit_byok.bat
+# 4) Click the extension toolbar icon → side panel opens inside Tabbit
+# 5) Right-click extension → Options to set/import API key
 ```
 
-Config is stored in `api_config.json` next to the script (gitignored). See `api_config.example.json`.
+Fallback (standalone page, not embedded):
+
+```bash
+python tabbit_ai_unlock.py --byok   # http://127.0.0.1:8765/
+```
+
+CLI config is stored in `api_config.json` (gitignored). Extension config is in Chrome storage (Options page). See `api_config.example.json` and `extension/`.
 
 ## Requirements
 
@@ -99,7 +104,8 @@ The tool NOPs the 6-byte skip branch so execution always falls through to `SetIs
 | `--set-api` | Save OpenAI/Anthropic/compatible API config |
 | `--show-api` | Show saved API config (key redacted) |
 | `--clear-api` | Delete saved API config |
-| `--byok` | Launch local BYOK chat panel |
+| `--install-extension` | Install **embedded** BYOK side-panel extension + launcher |
+| `--byok` | Launch local BYOK chat panel (localhost fallback) |
 | `--provider` | `openai` / `anthropic` / `openai-compatible` |
 | `--base-url` | API base URL |
 | `--api-key` | API key |

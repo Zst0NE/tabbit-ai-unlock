@@ -101,7 +101,7 @@ JE_REL32 = bytes([0x0F, 0x84])                      # je  rel32
 NOP_6 = bytes([0x90] * 6)                           # 6x nop
 SET_DEFAULT_TRUE = bytes([0xB2, 0x01, 0xE8])        # mov dl, 1; call ...
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
@@ -661,7 +661,8 @@ def cmd_set_api(
     print(f"     api_key  : {redacted}")
     print()
     print("Note: Tabbit's built-in AI panel still uses Meituan/Google backends.")
-    print("      Use --byok to open a local chat panel with YOUR API instead.")
+    print("      Prefer: --install-extension  (embedded side panel inside Tabbit)")
+    print("      Or:     --byok               (localhost page)")
     return True
 
 
@@ -692,7 +693,7 @@ def cmd_clear_api() -> bool:
 
 
 def cmd_byok(port: int, bind: str) -> bool:
-    """Launch local BYOK chat panel."""
+    """Launch local BYOK chat panel (standalone localhost page)."""
     cfg = _load_api_config()
     if not cfg or not cfg.get("api_key"):
         print("[FAIL] No API config. Run --set-api first.")
@@ -712,7 +713,114 @@ def cmd_byok(port: int, bind: str) -> bool:
         f"[OK] Starting BYOK panel for provider={cfg['provider']} model={cfg['model']}"
     )
     print(f"     Open in Tabbit: http://{bind}:{port}/")
+    print("     Tip: prefer --install-extension for a real embedded side panel.")
     run_server(cfg, host=bind, port=port)
+    return True
+
+
+def _extension_src_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "extension")
+
+
+def _extension_install_dir() -> str:
+    local = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(local, "Tabbit Browser", "BYOK Extension")
+
+
+def _find_tabbit_exe() -> Optional[str]:
+    """Locate Tabbit Browser.exe near the Application folder."""
+    dll, version_dir = _find_tabbit_dll()
+    if version_dir:
+        app_root = os.path.dirname(version_dir)
+        candidate = os.path.join(app_root, "Tabbit Browser.exe")
+        if os.path.isfile(candidate):
+            return candidate
+        # some layouts put exe next to version dir parent
+        for name in ("Tabbit Browser.exe", "chrome.exe"):
+            p = os.path.join(app_root, name)
+            if os.path.isfile(p):
+                return p
+    local = os.environ.get("LOCALAPPDATA", "")
+    for drive_user in (
+        os.path.join(local, "Tabbit Browser", "Application", "Tabbit Browser.exe"),
+        r"E:\Users\Stone\AppData\Local\Tabbit Browser\Application\Tabbit Browser.exe",
+        r"C:\Users\Stone\AppData\Local\Tabbit Browser\Application\Tabbit Browser.exe",
+    ):
+        if os.path.isfile(drive_user):
+            return drive_user
+    return None
+
+
+def cmd_install_extension() -> bool:
+    """Install the BYOK Chromium side-panel extension into Tabbit.
+
+    Copies extension files to a stable path and creates a launcher that starts
+    Tabbit with --load-extension so the panel is embedded in the browser UI
+    (toolbar icon + side panel). This does NOT replace Meituan's native AI
+    backend; it adds a parallel embedded panel for your own API keys.
+    """
+    src = _extension_src_dir()
+    if not os.path.isdir(src) or not os.path.isfile(os.path.join(src, "manifest.json")):
+        print(f"[FAIL] Extension source not found: {src}")
+        return False
+
+    dst = _extension_install_dir()
+    if os.path.isdir(dst):
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+    print(f"[OK] Extension installed to:\n     {dst}")
+
+    # Seed config into extension directory for easy import (options page)
+    cfg = _load_api_config()
+    if cfg:
+        seed = os.path.join(dst, "api_config.seed.json")
+        with open(seed, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        print(f"[OK] Seeded API config → {seed}")
+        print("     Open extension Options →「从 api_config.json 文本导入」paste its content.")
+
+    exe = _find_tabbit_exe()
+    launcher_dir = os.path.dirname(os.path.abspath(__file__))
+    bat_path = os.path.join(launcher_dir, "launch_tabbit_byok.bat")
+    ps1_path = os.path.join(launcher_dir, "launch_tabbit_byok.ps1")
+
+    if not exe:
+        print("[WARN] Could not auto-detect Tabbit Browser.exe")
+        print("       Load unpacked extension manually:")
+        print("       1. Open tabbit://extensions or chrome://extensions")
+        print("       2. Enable Developer mode")
+        print(f"       3. Load unpacked → {dst}")
+        return True
+
+    # Batch launcher (double-click friendly)
+    bat = (
+        "@echo off\r\n"
+        f'start "" "{exe}" --load-extension="{dst}"\r\n'
+    )
+    with open(bat_path, "w", encoding="utf-8") as f:
+        f.write(bat)
+
+    ps1 = (
+        f'$exe = "{exe}"\n'
+        f'$ext = "{dst}"\n'
+        'Start-Process -FilePath $exe -ArgumentList "--load-extension=`"$ext`""\n'
+    )
+    with open(ps1_path, "w", encoding="utf-8") as f:
+        f.write(ps1)
+
+    print(f"[OK] Launcher created:\n     {bat_path}")
+    print()
+    print("How to use the embedded panel:")
+    print("  1. Fully quit Tabbit (tray icon too)")
+    print("  2. Double-click launch_tabbit_byok.bat  (loads the side-panel extension)")
+    print("  3. Click the puzzle / extension icon → pin「Tabbit BYOK AI Panel」")
+    print("  4. Click the toolbar icon → side panel opens inside Tabbit")
+    print("  5. Configure API: right-click extension → Options")
+    print()
+    print("Manual alternative (persist without launcher):")
+    print("  tabbit://extensions → Developer mode → Load unpacked →")
+    print(f"  {dst}")
     return True
 
 
@@ -735,6 +843,7 @@ examples:
   %(prog)s --set-api --provider openai --api-key sk-xxx --model gpt-4o-mini
   %(prog)s --set-api --provider anthropic --api-key sk-ant-xxx --model claude-sonnet-4-6
   %(prog)s --set-api --provider openai-compatible --base-url https://proxy/v1 --api-key sk-xxx
+  %(prog)s --install-extension
   %(prog)s --byok
         """,
     )
@@ -748,7 +857,12 @@ examples:
     parser.add_argument("--set-api", action="store_true", help="save OpenAI/Anthropic API config")
     parser.add_argument("--show-api", action="store_true", help="show saved API config")
     parser.add_argument("--clear-api", action="store_true", help="delete saved API config")
-    parser.add_argument("--byok", action="store_true", help="launch local BYOK chat panel")
+    parser.add_argument(
+        "--install-extension",
+        action="store_true",
+        help="install embedded BYOK side-panel extension into Tabbit",
+    )
+    parser.add_argument("--byok", action="store_true", help="launch local BYOK chat panel (localhost)")
     parser.add_argument("--provider", type=str, default=None,
                         help="openai | anthropic | openai-compatible")
     parser.add_argument("--base-url", type=str, default=None, help="API base URL")
@@ -761,7 +875,9 @@ examples:
 
     args = parser.parse_args()
 
-    api_actions = any([args.set_api, args.show_api, args.clear_api, args.byok])
+    api_actions = any([
+        args.set_api, args.show_api, args.clear_api, args.byok, args.install_extension
+    ])
     unlock_actions = any([
         args.patch, args.restore, args.status, args.block_updates, args.restore_updates
     ])
@@ -783,6 +899,9 @@ examples:
 
     if args.clear_api:
         ok = cmd_clear_api() and ok
+
+    if args.install_extension:
+        ok = cmd_install_extension() and ok
 
     if args.byok:
         return 0 if cmd_byok(args.port, args.bind) else 1
