@@ -1,38 +1,40 @@
 {
   "manifest_version": 3,
-  "name": "Tabbit AI 助手（自有接口）",
-  "version": "1.4.0",
-  "description": "在 Tabbit 侧栏内嵌 AI 助手，使用你自己的 OpenAI / Anthropic / 兼容接口。视觉对齐 Tabbit 官方面板。",
-  "permissions": [
-    "storage",
-    "sidePanel"
-  ],
+  "name": "Tabbit 原生 Chat 自有 API",
+  "version": "1.5.0",
+  "description": "不改官方 Chat UI：仅在 web.tabbit-ai.com 内拦截 /chat/send，可选走你的 OpenAI/Anthropic。",
+  "permissions": ["storage"],
   "host_permissions": [
+    "https://web.tabbit-ai.com/*",
+    "https://web.tabbit.com/*",
+    "https://*.tabbit-ai.com/*",
     "https://*/*",
     "http://*/*"
   ],
-  "background": {
-    "service_worker": "background.js"
-  },
-  "side_panel": {
-    "default_path": "sidepanel.html"
-  },
-  "action": {
-    "default_title": "打开 AI 助手",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png"
+  "content_scripts": [
+    {
+      "matches": [
+        "https://web.tabbit-ai.com/*",
+        "https://web.tabbit.com/*",
+        "https://*.tabbit-ai.com/*"
+      ],
+      "js": ["native_bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
-  },
-  "options_ui": {
-    "page": "options.html",
-    "open_in_tab": true
-  },
+  ],
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Tabbit 原生 Chat 自有 API（在 Chat 侧栏右下角点 API）",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
   }
 }
