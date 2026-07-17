@@ -3,24 +3,32 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tabbit BYOK</title>
+  <title>AI 助手</title>
   <link rel="stylesheet" href="sidepanel.css" />
 </head>
 <body>
   <header>
-    <div class="title">
-      <strong>BYOK AI</strong>
-      <span id="meta" class="meta">…</span>
+    <div class="brand">
+      <div class="logo" aria-hidden="true">✦</div>
+      <div class="titles">
+        <strong>AI 助手</strong>
+        <span id="meta" class="meta">正在加载…</span>
+      </div>
     </div>
     <div class="actions">
-      <button type="button" id="btnSettings" title="设置">⚙</button>
-      <button type="button" id="btnClear" title="清空对话">🗑</button>
+      <button type="button" id="btnSettings" title="设置" aria-label="设置">⚙</button>
+      <button type="button" id="btnClear" title="新对话" aria-label="新对话">＋</button>
     </div>
   </header>
+
   <main id="log"></main>
+
   <footer>
-    <textarea id="input" rows="2" placeholder="输入消息，Enter 发送 / Shift+Enter 换行"></textarea>
-    <button type="button" id="send">发送</button>
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="问我任何问题…"></textarea>
+      <button type="button" id="send" title="发送">↑</button>
+    </div>
+    <div class="hint">自有接口 · 与官方会员 AI 并行，互不影响</div>
   </footer>
   <script src="sidepanel.js"></script>
 </body>

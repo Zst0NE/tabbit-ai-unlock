@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Tabbit BYOK AI Panel",
-  "version": "1.0.0",
-  "description": "Embedded side panel for your own OpenAI / Anthropic / OpenAI-compatible API inside Tabbit Browser.",
+  "name": "Tabbit AI 助手（自有接口）",
+  "version": "1.4.0",
+  "description": "在 Tabbit 侧栏内嵌 AI 助手，使用你自己的 OpenAI / Anthropic / 兼容接口。视觉对齐 Tabbit 官方面板。",
   "permissions": [
     "storage",
     "sidePanel"
@@ -18,7 +18,7 @@
     "default_path": "sidepanel.html"
   },
   "action": {
-    "default_title": "打开 BYOK AI 面板",
+    "default_title": "打开 AI 助手",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

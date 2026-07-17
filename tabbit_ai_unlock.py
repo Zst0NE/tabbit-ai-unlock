@@ -101,7 +101,7 @@ JE_REL32 = bytes([0x0F, 0x84])                      # je  rel32
 NOP_6 = bytes([0x90] * 6)                           # 6x nop
 SET_DEFAULT_TRUE = bytes([0xB2, 0x01, 0xE8])        # mov dl, 1; call ...
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
@@ -892,6 +892,90 @@ def cmd_embed_glic(port: int, bind: str) -> bool:
     return True
 
 
+def _create_desktop_shortcut(bat_path: str) -> Optional[str]:
+    """Create a Desktop shortcut to the Tabbit+BYOK launcher (Windows)."""
+    try:
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        if not os.path.isdir(desktop):
+            desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+        if not os.path.isdir(desktop):
+            return None
+        lnk = os.path.join(desktop, "Tabbit AI 助手.bat")
+        # simple bat proxy on desktop (no pywin32 needed for .lnk)
+        with open(lnk, "w", encoding="utf-8") as f:
+            f.write("@echo off\r\n")
+            f.write(f'call "{bat_path}"\r\n')
+        return lnk
+    except OSError:
+        return None
+
+
+def cmd_one_click() -> bool:
+    """One-click: unlock default-browser gate + block updates + install side panel.
+
+    Designed for end users who want Tabbit-native look with their own API.
+    """
+    print("=" * 56)
+    print("  Tabbit AI 一键内嵌")
+    print("  1) 解锁默认浏览器限制")
+    print("  2) 冻结自动更新（保护补丁）")
+    print("  3) 安装与 Tabbit 风格统一的侧栏 AI 助手")
+    print("=" * 56)
+    print()
+
+    dll_path, version_dir = _find_tabbit_dll()
+    if not dll_path or not os.path.isfile(dll_path):
+        print("[FAIL] 未找到 Tabbit.dll。请确认已安装 Tabbit Browser。")
+        return False
+
+    print(f"Tabbit.dll : {dll_path}")
+    print(f"Version    : {os.path.basename(version_dir)}")
+    print()
+
+    ok = True
+
+    print(">>> [A] 检查 / 应用 AI 解锁补丁")
+    # close hint
+    print("    若补丁失败，请先完全退出 Tabbit（含托盘）后重试。")
+    ok = cmd_patch(dll_path) and ok
+    print()
+
+    print(">>> [B] 阻止自动更新覆盖补丁")
+    ok = cmd_block_updates(version_dir) and ok
+    print()
+
+    print(">>> [C] 安装内嵌侧栏扩展（统一视觉）")
+    ok = cmd_install_extension() and ok
+    print()
+
+    # Enhance launcher name for consistency
+    launcher_dir = os.path.dirname(os.path.abspath(__file__))
+    bat_path = os.path.join(launcher_dir, "launch_tabbit_byok.bat")
+    if os.path.isfile(bat_path):
+        desk = _create_desktop_shortcut(bat_path)
+        if desk:
+            print(f"[OK] 桌面启动项: {desk}")
+
+    print()
+    print("=" * 56)
+    print("  安装完成 — 使用方式")
+    print("=" * 56)
+    print("  1. 完全退出 Tabbit（任务栏托盘也要退）")
+    print("  2. 双击桌面「Tabbit AI 助手」或 launch_tabbit_byok.bat")
+    print("  3. 首次：扩展图标右键 → 选项 → 填写 API")
+    print("     或: python tabbit_ai_unlock.py --set-api --provider ...")
+    print("  4. 点击工具栏「AI 助手」金色图标 → 侧栏打开")
+    print()
+    print("  与官方统一性：")
+    print("  · 侧栏内嵌在 Tabbit 窗口内（非外置网页）")
+    print("  · 美团金配色 + 中文交互，贴近官方 AI 面板")
+    print("  · 官方会员 AI 仍可用（美团后端）；自有接口并行")
+    print()
+    if not ok:
+        print("[WARN] 部分步骤失败，请查看上方日志。")
+    return ok
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -911,6 +995,7 @@ examples:
   %(prog)s --set-api --provider openai --api-key sk-xxx --model gpt-4o-mini
   %(prog)s --set-api --provider anthropic --api-key sk-ant-xxx --model claude-sonnet-4-6
   %(prog)s --set-api --provider openai-compatible --base-url https://proxy/v1 --api-key sk-xxx
+  %(prog)s --one-click
   %(prog)s --install-extension
   %(prog)s --embed-glic
   %(prog)s --byok
@@ -926,6 +1011,11 @@ examples:
     parser.add_argument("--set-api", action="store_true", help="save OpenAI/Anthropic API config")
     parser.add_argument("--show-api", action="store_true", help="show saved API config")
     parser.add_argument("--clear-api", action="store_true", help="delete saved API config")
+    parser.add_argument(
+        "--one-click",
+        action="store_true",
+        help="一键：解锁门控 + 冻更新 + 安装统一风格侧栏扩展",
+    )
     parser.add_argument(
         "--install-extension",
         action="store_true",
@@ -951,7 +1041,7 @@ examples:
 
     api_actions = any([
         args.set_api, args.show_api, args.clear_api, args.byok,
-        args.install_extension, args.embed_glic,
+        args.install_extension, args.embed_glic, args.one_click,
     ])
     unlock_actions = any([
         args.patch, args.restore, args.status, args.block_updates, args.restore_updates
@@ -962,6 +1052,9 @@ examples:
         return 0
 
     ok = True
+
+    if args.one_click:
+        return 0 if cmd_one_click() else 1
 
     if args.set_api:
         if not args.provider:

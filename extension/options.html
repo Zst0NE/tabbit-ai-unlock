@@ -3,47 +3,64 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tabbit BYOK 设置</title>
+  <title>AI 助手设置</title>
   <style>
     :root {
-      --bg: #0f1115; --panel: #171a21; --border: #2a2f3a;
-      --text: #e8eaed; --muted: #9aa0a6; --accent: #6c8cff; --ok: #3dd68c;
+      --bg: #0f1114; --panel: #171a1f; --border: rgba(255,255,255,.08);
+      --text: #f2f3f5; --muted: #9aa0a6; --accent: #ffc300; --ok: #3dd68c;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f7f9; --panel: #fff; --border: rgba(0,0,0,.08);
+        --text: #1a1d24; --muted: #5f6368;
+      }
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0; min-height: 100vh; font-family: "Segoe UI", system-ui, sans-serif;
+      margin: 0; min-height: 100vh; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
       background: var(--bg); color: var(--text); padding: 32px 16px;
     }
     .card {
       max-width: 560px; margin: 0 auto; background: var(--panel);
-      border: 1px solid var(--border); border-radius: 14px; padding: 24px;
+      border: 1px solid var(--border); border-radius: 16px; padding: 24px;
+    }
+    .logo {
+      width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
+      background: linear-gradient(145deg, #ffd84d, #ffb800); color: #1a1400; font-weight: 700;
+      margin-bottom: 12px;
     }
     h1 { margin: 0 0 6px; font-size: 20px; }
-    p { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    p { color: var(--muted); font-size: 13px; line-height: 1.55; }
     label { display: block; margin: 14px 0 6px; font-size: 13px; color: var(--muted); }
     input, select {
-      width: 100%; padding: 10px 12px; border-radius: 10px;
+      width: 100%; padding: 11px 12px; border-radius: 12px;
       border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit;
     }
-    .row { display: flex; gap: 10px; margin-top: 20px; }
+    .row { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
     button {
-      border: 0; border-radius: 10px; padding: 10px 16px; font-weight: 600; cursor: pointer;
+      border: 0; border-radius: 12px; padding: 11px 16px; font-weight: 600; cursor: pointer; font: inherit;
     }
-    #save { background: var(--accent); color: #fff; }
+    #save { background: var(--accent); color: #1a1400; }
     #import { background: transparent; color: var(--text); border: 1px solid var(--border); }
     #status { margin-top: 14px; font-size: 13px; color: var(--ok); min-height: 1.2em; }
+    .note {
+      margin-top: 18px; padding: 12px 14px; border-radius: 12px;
+      background: rgba(255,195,0,.1); border: 1px solid rgba(255,195,0,.25);
+      font-size: 12.5px; line-height: 1.5; color: var(--text);
+    }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>BYOK API 设置</h1>
-    <p>配置后，在 Tabbit 任意页面点击工具栏扩展图标，即可打开内嵌侧栏聊天面板。</p>
+    <div class="logo">✦</div>
+    <h1>AI 助手设置</h1>
+    <p>配置后，在 Tabbit 任意页面点击工具栏「AI 助手」图标，即可打开与官方风格一致的侧栏。</p>
 
-    <label for="provider">Provider</label>
+    <label for="provider">接口类型</label>
     <select id="provider">
-      <option value="openai">OpenAI</option>
-      <option value="anthropic">Anthropic</option>
-      <option value="openai-compatible">OpenAI-compatible（代理 / NewAPI 等）</option>
+      <option value="openai">OpenAI 官方</option>
+      <option value="anthropic">Anthropic 官方</option>
+      <option value="openai-compatible">OpenAI 兼容（NewAPI / 代理等）</option>
     </select>
 
     <label for="base_url">Base URL</label>
@@ -52,14 +69,18 @@
     <label for="api_key">API Key</label>
     <input id="api_key" type="password" placeholder="sk-..." autocomplete="off" />
 
-    <label for="model">Model</label>
+    <label for="model">模型</label>
     <input id="model" placeholder="gpt-4o-mini / claude-sonnet-4-6" />
 
     <div class="row">
       <button type="button" id="save">保存</button>
-      <button type="button" id="import">从 api_config.json 文本导入</button>
+      <button type="button" id="import">从 JSON 导入</button>
     </div>
     <div id="status"></div>
+    <div class="note">
+      官方会员 AI 仍使用美团/Google 后端；本助手使用你填写的接口，两者并行、互不影响。
+      这样既保持 Tabbit 内嵌体验统一，又能用自己的 Key。
+    </div>
   </div>
   <script src="options.js"></script>
 </body>
