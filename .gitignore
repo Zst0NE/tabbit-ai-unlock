@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 *.bak
 *.dll
+api_config.json
+_analysis/

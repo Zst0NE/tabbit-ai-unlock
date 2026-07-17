@@ -1,8 +1,10 @@
 # Tabbit Browser AI Unlock
 
-Bypass the "must set as default browser" restriction for AI features in Tabbit Browser.
+Bypass the "must set as default browser" restriction for AI features in Tabbit Browser, and optionally run a **Bring-Your-Own-Key (BYOK)** chat panel with your own OpenAI / Anthropic API.
 
-Tabbit Browser (by Meituan) is a Chromium fork with a built-in AI assistant (based on Chrome's Glic/Gemini side panel). Tabbit added a hard-coded gate that **blocks AI features unless Tabbit is the Windows default browser**. This tool removes that restriction via a binary patch.
+Tabbit Browser (by Meituan) is a Chromium fork with a built-in AI assistant (Chrome Glic / Gemini side panel + Meituan backends). Tabbit hard-codes a native gate that **blocks AI unless Tabbit is the Windows default browser**. This tool removes that restriction via a binary patch.
+
+> **Tested on:** Tabbit `1.1.39.0` (legacy pattern) and `1.5.44.0` (new pattern).
 
 ## Quick Start
 
@@ -19,55 +21,100 @@ python tabbit_ai_unlock.py --status
 python tabbit_ai_unlock.py --restore --restore-updates
 ```
 
+## Custom OpenAI / Anthropic API (BYOK)
+
+Tabbit's **built-in** AI panel talks to Meituan (`web.tabbit.ai`, `skills.tabbit.com`, …) and Google backends. There is **no** official preference for plugging in your own OpenAI/Anthropic base URL.
+
+This tool therefore ships a **local BYOK chat panel** that uses *your* API key:
+
+```bash
+# OpenAI official
+python tabbit_ai_unlock.py --set-api --provider openai \
+  --api-key sk-xxx --model gpt-4o-mini
+
+# Anthropic official
+python tabbit_ai_unlock.py --set-api --provider anthropic \
+  --api-key sk-ant-xxx --model claude-sonnet-4-6
+
+# Any OpenAI-compatible proxy (DeepSeek, OneAPI, NewAPI, …)
+python tabbit_ai_unlock.py --set-api --provider openai-compatible \
+  --base-url https://your-proxy.example/v1 \
+  --api-key sk-xxx --model deepseek-chat
+
+# Launch local panel → open http://127.0.0.1:8765/ in Tabbit
+python tabbit_ai_unlock.py --byok
+
+python tabbit_ai_unlock.py --show-api
+python tabbit_ai_unlock.py --clear-api
+```
+
+Config is stored in `api_config.json` next to the script (gitignored). See `api_config.example.json`.
+
 ## Requirements
 
-- Python 3.6+ (no external dependencies)
+- Python 3.6+ (stdlib only — no pip packages)
 - Windows (Tabbit is Windows-only)
 - Tabbit Browser must be **closed** when patching
 
-## How It Works
+## How the Unlock Works
 
-Inside `Tabbit.dll`, there is a function that:
+Inside `Tabbit.dll`, a function:
 
 1. Reads the current Windows default browser via `AssocQueryString`
 2. Checks if the name contains "Tabbit"
 3. Calls `SetIsDefaultBrowser(true)` only if it matches
 
-The gate is a conditional branch:
+Gate variants:
 
 ```asm
-cmp  bpl, 1          ; did the name contain "Tabbit"?
-jne  <epilogue>      ; no -> skip, AI stays locked
+; v1.1.x
+cmp  bpl, 1
+jne  <skip SetIsDefault>
+
+; v1.5.x
+test bl, bl
+je   <skip SetIsDefault>
 ```
 
-This tool NOPs the `jne` (6 bytes → `90 90 90 90 90 90`), so it always falls through to `SetIsDefaultBrowser(true)`, unlocking AI regardless of which browser is set as default.
+The tool NOPs the 6-byte skip branch so execution always falls through to `SetIsDefaultBrowser(true)`.
 
-### Version-Resilient Locating
+### Version-resilient locating
 
-The patch offset changes between Tabbit versions. Instead of hardcoding it, the tool locates the patch point structurally:
-
-1. Find the anchor string `"Checking default browser: current="` in `.rdata`
-2. Find the `LEA RIP-relative` code reference in `.text`
-3. Use `.pdata` to resolve function boundaries
-4. Within the function, match the `cmp bpl, 1; jne rel32` pattern
-5. Verify the `jne` skips over `SetIsDefaultBrowser(true)`
-
-This approach works across Tabbit versions as long as the gate logic hasn't been fundamentally rewritten.
+1. Find anchor string `"Checking default browser: current="` in `.rdata`
+2. Find `LEA RIP-relative` xref in `.text`
+3. Resolve function bounds via `.pdata`
+4. Locate `SetIsDefault(true)` (`mov dl,1; call`) and the jcc that skips it
+5. Prefer known prefixes (`cmp bpl,1` / `test bl,bl`); NOP the jcc
 
 ## Options
 
 | Flag | Description |
 |------|-------------|
-| `--patch` | Apply the AI unlock patch (auto-creates `.bak` backup) |
+| `--patch` | Apply the AI unlock patch (auto-creates `.bak`) |
 | `--restore` | Restore original DLL from backup |
 | `--status` | Check current patch state |
-| `--block-updates` | Rename `Installer/setup.exe` to prevent auto-updates |
-| `--restore-updates` | Restore `setup.exe` to re-enable auto-updates |
-| `--dll PATH` | Explicit path to `Tabbit.dll` (auto-detected if omitted) |
+| `--block-updates` | Rename `Installer/setup.exe` to freeze version |
+| `--restore-updates` | Restore `setup.exe` |
+| `--dll PATH` | Explicit path to `Tabbit.dll` |
+| `--set-api` | Save OpenAI/Anthropic/compatible API config |
+| `--show-api` | Show saved API config (key redacted) |
+| `--clear-api` | Delete saved API config |
+| `--byok` | Launch local BYOK chat panel |
+| `--provider` | `openai` / `anthropic` / `openai-compatible` |
+| `--base-url` | API base URL |
+| `--api-key` | API key |
+| `--model` | Model id |
+| `--port` / `--bind` | BYOK listen address (default `127.0.0.1:8765`) |
 
 ## Why Block Updates?
 
-Tabbit auto-updates frequently. Each update creates a new version folder with a fresh `Tabbit.dll`, wiping the patch. Use `--block-updates` to prevent this.
+Tabbit auto-updates frequently. Each update drops a fresh `Tabbit.dll` and wipes the patch. Use `--block-updates`.
+
+## Limitations
+
+- Built-in Tabbit AI UI **cannot** be retargeted to OpenAI/Anthropic — protocol and auth are proprietary Meituan/Google. BYOK is a separate local panel.
+- If Tabbit rewrites the gate logic entirely, structural matching fails gracefully; re-analysis is needed.
+- Patching invalidates the Authenticode signature of `Tabbit.dll` (no functional impact observed for user-installed apps).
 
 ## License
 

@@ -2,14 +2,21 @@
 """
 Tabbit Browser AI Unlock Tool
 ==============================
-Bypass the "must set as default browser to use AI" restriction in Tabbit Browser.
+Bypass the "must set as default browser to use AI" restriction in Tabbit Browser,
+and optionally configure a Bring-Your-Own-Key (BYOK) OpenAI / Anthropic chat panel.
 
 Tabbit Browser (by Meituan) is a Chromium fork with a built-in AI assistant based
-on Chrome's Glic (Gemini side panel). Tabbit added a custom native gate that blocks
-AI features unless Tabbit is the Windows default browser.
+on Chrome's Glic (Gemini side panel) plus Meituan backends (web.tabbit.ai etc.).
+Tabbit added a custom native gate that blocks AI features unless Tabbit is the
+Windows default browser.
 
 This tool patches Tabbit.dll to remove that restriction. The patch point is located
 structurally (not by hardcoded offset) so it works across Tabbit versions.
+
+Additionally, because Tabbit's native AI is locked to Meituan/Google backends and
+does NOT expose a user-facing OpenAI/Anthropic base URL setting, this tool can
+launch a local BYOK chat panel that talks to your own OpenAI-compatible or
+Anthropic API endpoint.
 
 Usage:
     python tabbit_ai_unlock.py [options]
@@ -22,35 +29,51 @@ Options:
     --restore-updates  Restore Installer/setup.exe to re-enable auto-updates
     --dll PATH         Explicit path to Tabbit.dll (auto-detected if omitted)
 
+    --set-api          Save OpenAI/Anthropic API config (see --provider etc.)
+    --show-api         Show current API config (key redacted)
+    --clear-api        Remove saved API config
+    --byok             Launch local BYOK chat panel (uses saved API config)
+    --provider NAME    openai | anthropic | openai-compatible
+    --base-url URL     API base URL (e.g. https://api.openai.com/v1)
+    --api-key KEY      API key / token
+    --model NAME       Model id (e.g. gpt-4o-mini, claude-sonnet-4-6)
+    --port N           BYOK server port (default 8765)
+    --bind ADDR        BYOK bind address (default 127.0.0.1)
+
 Examples:
     python tabbit_ai_unlock.py --patch --block-updates
     python tabbit_ai_unlock.py --status
-    python tabbit_ai_unlock.py --restore --restore-updates
+    python tabbit_ai_unlock.py --set-api --provider openai --api-key sk-... --model gpt-4o-mini
+    python tabbit_ai_unlock.py --set-api --provider anthropic --api-key sk-ant-... --model claude-sonnet-4-6
+    python tabbit_ai_unlock.py --set-api --provider openai-compatible \\
+        --base-url https://your-proxy.example/v1 --api-key sk-... --model deepseek-chat
+    python tabbit_ai_unlock.py --byok
 
 Requirements:
-    Python 3.6+, no external dependencies.
+    Python 3.6+, no external dependencies for patch/status.
+    BYOK panel needs Python 3.6+ stdlib only (urllib).
     Tabbit Browser must be CLOSED when patching (DLL is locked while running).
 
-How it works:
+How the unlock works:
     Inside Tabbit.dll there is a function that:
     1. Reads the current Windows default browser name via AssocQueryString
     2. Checks if the name contains "Tabbit"
     3. Calls SetIsDefaultBrowser(true) only if it matches
 
-    The gate is a conditional branch:
-        cmp  bpl, 1          ; did the name contain "Tabbit"?
-        jne  <epilogue>      ; no -> skip, AI stays locked
+    Gate variants observed:
+      (v1.1.x)  cmp  bpl, 1 / jne  <skip SetIsDefault>
+      (v1.5.x)  test bl, bl  / je   <skip SetIsDefault>
 
-    This tool NOPs the jne (6 bytes), so it always falls through to
+    This tool NOPs the skip-branch (6 bytes), so it always falls through to
     SetIsDefaultBrowser(true), unlocking AI regardless of default browser.
 
 Locating strategy (version-resilient):
     1. Find unique string "Checking default browser: current=" in .rdata
     2. Find the LEA RIP-relative xref to it in .text
     3. Use .pdata to get the containing function's boundaries
-    4. Within that function, find: cmp bpl,1 + jne rel32
-    5. Verify the jne target skips past a SetIsDefault(true) call
-    6. NOP the 6-byte jne
+    4. Within that function, find SetIsDefault(true) = mov dl,1; call
+    5. Find conditional jump that skips past that call
+    6. Prefer known prefixes (cmp bpl,1 / test bl,bl); NOP the 6-byte jcc
 
 License: MIT
 """
@@ -58,6 +81,7 @@ License: MIT
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import struct
@@ -70,12 +94,26 @@ from typing import List, Optional, Tuple
 
 GATE_STRING = b"Checking default browser: current="
 
-CMP_BPL_1 = bytes([0x40, 0x80, 0xFD, 0x01])       # cmp bpl, 1
-JNE_REL32 = bytes([0x0F, 0x85])                     # jne rel32 (first 2 bytes)
-NOP_6     = bytes([0x90] * 6)                        # 6x nop
-SET_DEFAULT_TRUE = bytes([0xB2, 0x01, 0xE8])         # mov dl, 1; call ...
+CMP_BPL_1 = bytes([0x40, 0x80, 0xFD, 0x01])       # cmp bpl, 1  (v1.1.x)
+TEST_BL_BL = bytes([0x84, 0xDB])                    # test bl, bl (v1.5.x)
+JNE_REL32 = bytes([0x0F, 0x85])                     # jne rel32
+JE_REL32 = bytes([0x0F, 0x84])                      # je  rel32
+NOP_6 = bytes([0x90] * 6)                           # 6x nop
+SET_DEFAULT_TRUE = bytes([0xB2, 0x01, 0xE8])        # mov dl, 1; call ...
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+
+DEFAULT_BASE_URLS = {
+    "openai": "https://api.openai.com/v1",
+    "openai-compatible": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com",
+}
+
+DEFAULT_MODELS = {
+    "openai": "gpt-4o-mini",
+    "openai-compatible": "gpt-4o-mini",
+    "anthropic": "claude-sonnet-4-6",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -218,57 +256,134 @@ def _find_patch_point(
     func_start: int,
     func_end: int,
 ) -> Tuple[Optional[int], Optional[bytes], Optional[str]]:
-    """Within the gate function, find the cmp bpl,1 + jne pattern.
-    Returns (file_offset, current_6_bytes, error_msg)."""
+    """Within the gate function, find the skip-branch before SetIsDefault(true).
+
+    Supports:
+      v1.1.x: cmp bpl,1 ; jne rel32
+      v1.5.x: test bl,bl ; je  rel32
+      generic: any je/jne that jumps exactly past a mov dl,1; call site,
+               preferring known boolean-test prefixes.
+
+    Returns (file_offset, current_6_bytes, error_msg).
+    """
     fo_start = text.raw_off + (func_start - image_base - text.va)
     fo_end = text.raw_off + (func_end - image_base - text.va)
     func = data[fo_start:fo_end]
-    search_from = 0
 
+    # --- Strategy 1: known legacy pattern (cmp bpl,1 + jne/NOP) ---
+    search_from = 0
     while True:
         idx = func.find(CMP_BPL_1, search_from)
         if idx == -1:
             break
-
         jne_off = idx + len(CMP_BPL_1)
         if jne_off + 6 > len(func):
             search_from = idx + 1
             continue
-
         candidate = func[jne_off : jne_off + 6]
-
-        # Case 1: already patched (6x NOP)
         if candidate == NOP_6:
             after = func[jne_off + 6 : jne_off + 512]
             if SET_DEFAULT_TRUE in after:
                 return fo_start + jne_off, NOP_6, None
             search_from = idx + 1
             continue
-
-        # Case 2: original jne rel32
         if candidate[:2] != JNE_REL32:
             search_from = idx + 1
             continue
-
         disp = _i32(data, fo_start + jne_off + 2)
-        jne_next = jne_off + 6
-        jne_target_rel = jne_next + disp  # relative to func start
-
-        # jne must jump forward
         if disp <= 0:
             search_from = idx + 1
             continue
-
-        # Between jne and its target, SetIsDefault(true) must exist
-        between = func[jne_next : min(len(func), jne_target_rel)]
+        between = func[jne_off + 6 : min(len(func), jne_off + 6 + disp)]
         if SET_DEFAULT_TRUE not in between:
             search_from = idx + 1
             continue
+        return fo_start + jne_off, bytes(candidate), None
 
-        file_offset = fo_start + jne_off
-        return file_offset, bytes(candidate), None
+    # --- Strategy 2: known v1.5 pattern (test bl,bl + je/NOP) ---
+    search_from = 0
+    while True:
+        idx = func.find(TEST_BL_BL, search_from)
+        if idx == -1:
+            break
+        je_off = idx + len(TEST_BL_BL)
+        if je_off + 6 > len(func):
+            search_from = idx + 1
+            continue
+        candidate = func[je_off : je_off + 6]
+        if candidate == NOP_6:
+            after = func[je_off + 6 : je_off + 512]
+            if SET_DEFAULT_TRUE in after:
+                return fo_start + je_off, NOP_6, None
+            search_from = idx + 1
+            continue
+        if candidate[:2] != JE_REL32:
+            search_from = idx + 1
+            continue
+        disp = _i32(data, fo_start + je_off + 2)
+        if disp <= 0:
+            search_from = idx + 1
+            continue
+        between = func[je_off + 6 : min(len(func), je_off + 6 + disp)]
+        if SET_DEFAULT_TRUE not in between:
+            search_from = idx + 1
+            continue
+        return fo_start + je_off, bytes(candidate), None
 
-    return None, None, "Could not locate 'cmp bpl, 1; jne' pattern in the gate function."
+    # --- Strategy 3: generic — jcc that lands exactly after SetIsDefault(true) ---
+    set_sites = []
+    st = 0
+    while True:
+        j = func.find(SET_DEFAULT_TRUE, st)
+        if j == -1:
+            break
+        set_sites.append(j)
+        st = j + 1
+
+    for set_j in set_sites:
+        after = set_j + 7  # end of mov dl,1; call
+        # Prefer boolean-test prefixes
+        for i in range(max(0, set_j - 512), set_j - 5):
+            if func[i : i + 2] not in (JE_REL32, JNE_REL32):
+                continue
+            disp = struct.unpack_from("<i", func, i + 2)[0]
+            if i + 6 + disp != after:
+                continue
+            prev2 = func[i - 2 : i] if i >= 2 else b""
+            prev4 = func[i - 4 : i] if i >= 4 else b""
+            preferred = (
+                prev2 == TEST_BL_BL
+                or prev4 == CMP_BPL_1
+                or prev2 in (
+                    bytes([0x84, 0xC0]),
+                    bytes([0x84, 0xDB]),
+                    bytes([0x84, 0xC9]),
+                )
+            )
+            if preferred:
+                return fo_start + i, bytes(func[i : i + 6]), None
+        # Fallback: earliest jcc that skips this set site
+        for i in range(max(0, set_j - 512), set_j - 5):
+            if func[i : i + 2] not in (JE_REL32, JNE_REL32):
+                continue
+            disp = struct.unpack_from("<i", func, i + 2)[0]
+            if i + 6 + disp == after:
+                return fo_start + i, bytes(func[i : i + 6]), None
+
+    # Already-patched generic: NOP after known test/cmp prefixes
+    for set_j in set_sites:
+        for i in range(max(0, set_j - 512), set_j - 5):
+            if func[i : i + 6] != NOP_6:
+                continue
+            prev2 = func[i - 2 : i] if i >= 2 else b""
+            prev4 = func[i - 4 : i] if i >= 4 else b""
+            if prev2 == TEST_BL_BL or prev4 == CMP_BPL_1:
+                return fo_start + i, NOP_6, None
+
+    return None, None, (
+        "Could not locate gate skip-branch (cmp bpl,1 / test bl,bl / jcc over "
+        "SetIsDefault). Tabbit may have rewritten the gate — re-analyze needed."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -279,19 +394,25 @@ def _find_tabbit_dll() -> Tuple[Optional[str], Optional[str]]:
     """Auto-detect the latest Tabbit.dll. Returns (dll_path, version_dir)."""
     candidates = []
 
-    # Standard location
     local = os.environ.get("LOCALAPPDATA", "")
     if local:
         candidates.append(os.path.join(local, "Tabbit Browser", "Application"))
 
-    # Common custom locations (Windows drive letters)
     for drive in ("C", "D", "E"):
         for user_dir in ("Users\\Stone", "Users\\Administrator"):
             candidates.append(
                 f"{drive}:\\{user_dir}\\AppData\\Local\\Tabbit Browser\\Application"
             )
 
-    for base in candidates:
+    seen = set()
+    uniq = []
+    for c in candidates:
+        key = os.path.normcase(os.path.normpath(c))
+        if key not in seen:
+            seen.add(key)
+            uniq.append(c)
+
+    for base in uniq:
         if not os.path.isdir(base):
             continue
         versions = []
@@ -324,7 +445,6 @@ def _analyze(dll_path: str, verbose: bool = True):
     if not text or not pdata:
         raise RuntimeError("Missing .text or .pdata section — not a valid Tabbit.dll")
 
-    # Step 1
     if verbose:
         print("[1/4] Locating anchor string...")
     string_va, err = _find_string_va(data, sections, image_base)
@@ -333,7 +453,6 @@ def _analyze(dll_path: str, verbose: bool = True):
     if verbose:
         print(f"      Found at VA 0x{string_va:X}")
 
-    # Step 2
     if verbose:
         print("[2/4] Finding code reference (LEA RIP-relative)...")
     xref_va, _ = _find_lea_xref(data, text, image_base, string_va)
@@ -342,7 +461,6 @@ def _analyze(dll_path: str, verbose: bool = True):
     if verbose:
         print(f"      Found at VA 0x{xref_va:X}")
 
-    # Step 3
     if verbose:
         print("[3/4] Resolving function boundaries (.pdata)...")
     func_start, func_end = _find_function(data, pdata, image_base, xref_va)
@@ -351,7 +469,6 @@ def _analyze(dll_path: str, verbose: bool = True):
     if verbose:
         print(f"      Function 0x{func_start:X}..0x{func_end:X} ({func_end - func_start} bytes)")
 
-    # Step 4
     if verbose:
         print("[4/4] Locating patch point...")
     file_offset, current_bytes, err = _find_patch_point(
@@ -366,7 +483,7 @@ def _analyze(dll_path: str, verbose: bool = True):
 
 
 # ---------------------------------------------------------------------------
-# Commands
+# Unlock commands
 # ---------------------------------------------------------------------------
 
 def cmd_status(dll_path: str) -> bool:
@@ -399,7 +516,6 @@ def cmd_patch(dll_path: str) -> bool:
         print("\n[OK] Already patched — nothing to do.")
         return True
 
-    # Backup
     bak = dll_path + ".bak"
     if not os.path.exists(bak):
         print(f"\nCreating backup: {os.path.basename(bak)}")
@@ -407,7 +523,6 @@ def cmd_patch(dll_path: str) -> bool:
     else:
         print(f"\nBackup already exists: {os.path.basename(bak)}")
 
-    # Patch
     print("Applying patch...")
     patched = bytearray(data)
     patched[offset : offset + 6] = NOP_6
@@ -419,7 +534,6 @@ def cmd_patch(dll_path: str) -> bool:
         print("\n[FAIL] Cannot write — is Tabbit Browser still running? Close it first.")
         return False
 
-    # Verify
     verify = open(dll_path, "rb").read()
     if verify[offset : offset + 6] == NOP_6:
         print(f"\n[OK] Patch applied successfully!")
@@ -441,7 +555,7 @@ def cmd_restore(dll_path: str) -> bool:
     except PermissionError:
         print("[FAIL] Cannot write — is Tabbit Browser still running? Close it first.")
         return False
-    print(f"[OK] Restored from backup.")
+    print("[OK] Restored from backup.")
     return True
 
 
@@ -456,7 +570,7 @@ def cmd_block_updates(version_dir: str) -> bool:
         os.rename(setup, disabled)
         print("[OK] Updates blocked: setup.exe -> setup.exe.disabled")
         return True
-    print(f"[WARN] setup.exe not found at expected location.")
+    print("[WARN] setup.exe not found at expected location.")
     return False
 
 
@@ -476,6 +590,133 @@ def cmd_restore_updates(version_dir: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# BYOK API config
+# ---------------------------------------------------------------------------
+
+def _config_path() -> str:
+    """Prefer project-local config next to this script."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(here, "api_config.json")
+
+
+def _load_api_config() -> Optional[dict]:
+    path = _config_path()
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_api_config(cfg: dict) -> str:
+    path = _config_path()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return path
+
+
+def cmd_set_api(
+    provider: str,
+    base_url: Optional[str],
+    api_key: Optional[str],
+    model: Optional[str],
+) -> bool:
+    provider = (provider or "").strip().lower()
+    if provider not in DEFAULT_BASE_URLS:
+        print(
+            f"[FAIL] Unknown provider '{provider}'. "
+            "Use: openai | anthropic | openai-compatible"
+        )
+        return False
+
+    existing = _load_api_config() or {}
+    cfg = {
+        "provider": provider,
+        "base_url": (
+            base_url or existing.get("base_url") or DEFAULT_BASE_URLS[provider]
+        ).rstrip("/"),
+        "api_key": api_key if api_key is not None else existing.get("api_key", ""),
+        "model": model or existing.get("model") or DEFAULT_MODELS[provider],
+    }
+
+    if not cfg["api_key"]:
+        print("[FAIL] --api-key is required (or set previously).")
+        return False
+
+    path = _save_api_config(cfg)
+    redacted = (
+        cfg["api_key"][:6] + "..." + cfg["api_key"][-4:]
+        if len(cfg["api_key"]) > 12
+        else "***"
+    )
+    print("[OK] API config saved.")
+    print(f"     file     : {path}")
+    print(f"     provider : {cfg['provider']}")
+    print(f"     base_url : {cfg['base_url']}")
+    print(f"     model    : {cfg['model']}")
+    print(f"     api_key  : {redacted}")
+    print()
+    print("Note: Tabbit's built-in AI panel still uses Meituan/Google backends.")
+    print("      Use --byok to open a local chat panel with YOUR API instead.")
+    return True
+
+
+def cmd_show_api() -> bool:
+    cfg = _load_api_config()
+    if not cfg:
+        print("[--] No API config found. Use --set-api to create one.")
+        return False
+    key = cfg.get("api_key", "")
+    redacted = key[:6] + "..." + key[-4:] if len(key) > 12 else "***"
+    print("[OK] Current API config:")
+    print(f"     file     : {_config_path()}")
+    print(f"     provider : {cfg.get('provider')}")
+    print(f"     base_url : {cfg.get('base_url')}")
+    print(f"     model    : {cfg.get('model')}")
+    print(f"     api_key  : {redacted}")
+    return True
+
+
+def cmd_clear_api() -> bool:
+    path = _config_path()
+    if os.path.isfile(path):
+        os.remove(path)
+        print(f"[OK] Removed {path}")
+        return True
+    print("[--] No API config to remove.")
+    return True
+
+
+def cmd_byok(port: int, bind: str) -> bool:
+    """Launch local BYOK chat panel."""
+    cfg = _load_api_config()
+    if not cfg or not cfg.get("api_key"):
+        print("[FAIL] No API config. Run --set-api first.")
+        return False
+
+    try:
+        from tabbit_byok import run_server
+    except ImportError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        try:
+            from tabbit_byok import run_server
+        except ImportError as e:
+            print(f"[FAIL] Cannot import tabbit_byok: {e}")
+            return False
+
+    print(
+        f"[OK] Starting BYOK panel for provider={cfg['provider']} model={cfg['model']}"
+    )
+    print(f"     Open in Tabbit: http://{bind}:{port}/")
+    run_server(cfg, host=bind, port=port)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -483,14 +724,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Tabbit Browser AI Unlock — "
-            "bypass the default-browser requirement for AI features"
+            "bypass the default-browser requirement; optional BYOK OpenAI/Anthropic panel"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  %(prog)s --patch --block-updates    Unlock AI and freeze version
-  %(prog)s --status                   Check current state
-  %(prog)s --restore --restore-updates  Undo everything
+  %(prog)s --patch --block-updates
+  %(prog)s --status
+  %(prog)s --restore --restore-updates
+  %(prog)s --set-api --provider openai --api-key sk-xxx --model gpt-4o-mini
+  %(prog)s --set-api --provider anthropic --api-key sk-ant-xxx --model claude-sonnet-4-6
+  %(prog)s --set-api --provider openai-compatible --base-url https://proxy/v1 --api-key sk-xxx
+  %(prog)s --byok
         """,
     )
     parser.add_argument("--patch", action="store_true", help="apply the AI unlock patch")
@@ -499,15 +744,52 @@ examples:
     parser.add_argument("--block-updates", action="store_true", help="block Tabbit auto-updates")
     parser.add_argument("--restore-updates", action="store_true", help="restore auto-updates")
     parser.add_argument("--dll", type=str, default=None, help="explicit path to Tabbit.dll")
+
+    parser.add_argument("--set-api", action="store_true", help="save OpenAI/Anthropic API config")
+    parser.add_argument("--show-api", action="store_true", help="show saved API config")
+    parser.add_argument("--clear-api", action="store_true", help="delete saved API config")
+    parser.add_argument("--byok", action="store_true", help="launch local BYOK chat panel")
+    parser.add_argument("--provider", type=str, default=None,
+                        help="openai | anthropic | openai-compatible")
+    parser.add_argument("--base-url", type=str, default=None, help="API base URL")
+    parser.add_argument("--api-key", type=str, default=None, help="API key")
+    parser.add_argument("--model", type=str, default=None, help="model id")
+    parser.add_argument("--port", type=int, default=8765, help="BYOK server port (default 8765)")
+    parser.add_argument("--bind", type=str, default="127.0.0.1", help="BYOK bind address")
+
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
 
     args = parser.parse_args()
 
-    if not any([args.patch, args.restore, args.status, args.block_updates, args.restore_updates]):
+    api_actions = any([args.set_api, args.show_api, args.clear_api, args.byok])
+    unlock_actions = any([
+        args.patch, args.restore, args.status, args.block_updates, args.restore_updates
+    ])
+
+    if not api_actions and not unlock_actions:
         parser.print_help()
         return 0
 
-    # Resolve paths
+    ok = True
+
+    if args.set_api:
+        if not args.provider:
+            print("[FAIL] --set-api requires --provider")
+            return 1
+        ok = cmd_set_api(args.provider, args.base_url, args.api_key, args.model) and ok
+
+    if args.show_api:
+        ok = cmd_show_api() and ok
+
+    if args.clear_api:
+        ok = cmd_clear_api() and ok
+
+    if args.byok:
+        return 0 if cmd_byok(args.port, args.bind) else 1
+
+    if not unlock_actions:
+        return 0 if ok else 1
+
     if args.dll:
         dll_path = args.dll
         version_dir = os.path.dirname(dll_path)
@@ -521,8 +803,6 @@ examples:
     print(f"Tabbit.dll : {dll_path}")
     print(f"Version dir: {version_dir}")
     print()
-
-    ok = True
 
     if args.status:
         ok = cmd_status(dll_path) and ok
